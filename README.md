@@ -1,6 +1,7 @@
 # sparx-bot
 
 CHROME BROWSER ONLY (maybe?)
+Currently fails on certain types of questions - but what it does is that when you click start ai it will show an answer box in the top right - it is almost always correct.
 
 Sparx maths [Tampermonkey](https://www.tampermonkey.net/) extension which uses an AI api, groq, and automatically solves questions.
 
