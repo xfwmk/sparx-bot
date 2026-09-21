@@ -1,5 +1,8 @@
 # sparx-bot
-Sparx maths Tampermonkey extension which uses an AI api, groq, and automatically solves questions.
+
+CHROME BROWSER ONLY (maybe?)
+
+Sparx maths [Tampermonkey](https://www.tampermonkey.net/) extension which uses an AI api, groq, and automatically solves questions.
 
 Tampermonkey - Install tampermonkey browser extension on chrome.
                Once installed click on the icon and press new script.
