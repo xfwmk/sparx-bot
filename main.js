@@ -14,7 +14,7 @@
     'use strict';
 
     // ============================================================
-    // PUT YOUR NEW GROQ API KEY BETWEEN THE QUOTES
+    // ENTER GROQ API KEY HERE
     // ============================================================
 
     const GROQ_API_KEY = 'GROQ_API_KEY';
@@ -28,11 +28,6 @@
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
-
-
-    // ============================================================
-    // GROQ
-    // ============================================================
 
     function askGroq(question, answerType, numberOfInputs, choices) {
 
@@ -191,24 +186,12 @@ ${instructions}
 
         });
     }
-
-
-    // ============================================================
-    // PAGE TEXT
-    // ============================================================
-
     function getPageText() {
 
         return document.body.innerText
             .replace(/\n{3,}/g, '\n\n')
             .trim();
     }
-
-
-    // ============================================================
-    // FIND BUTTON BY TEXT
-    // ============================================================
-
     function findButton(text) {
 
         const elements = [
@@ -233,12 +216,6 @@ ${instructions}
 
         });
     }
-
-
-    // ============================================================
-    // WAIT FOR BUTTON
-    // ============================================================
-
     async function waitForButton(text) {
 
         for (;;) {
@@ -256,12 +233,6 @@ ${instructions}
             await sleep(300);
         }
     }
-
-
-    // ============================================================
-    // GET ANSWER INPUTS
-    // ============================================================
-
     function getAnswerInputs() {
 
         const inputs = [
@@ -286,12 +257,6 @@ ${instructions}
             );
         });
     }
-
-
-    // ============================================================
-    // GET MULTIPLE CHOICE OPTIONS
-    // ============================================================
-
     function getChoices() {
 
         const elements = [
@@ -318,12 +283,6 @@ ${instructions}
             );
         });
     }
-
-
-    // ============================================================
-    // DETECT ANSWER TYPE
-    // ============================================================
-
     function detectAnswerType() {
 
         const inputs =
@@ -354,12 +313,6 @@ ${instructions}
             type: 'unknown'
         };
     }
-
-
-    // ============================================================
-    // SET INPUT VALUE PROPERLY
-    // ============================================================
-
     function setInputValue(input, value) {
 
         const nativeSetter =
@@ -401,12 +354,6 @@ ${instructions}
             )
         );
     }
-
-
-    // ============================================================
-    // QUESTION
-    // ============================================================
-
     async function getQuestionScreen() {
 
         console.log(
