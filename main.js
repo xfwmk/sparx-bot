@@ -2,7 +2,7 @@
 // @name         sparx-bot
 // @namespace    https://github.com/xfwmk/sparx-bot/
 // @version      1
-// @description  Sparx Maths test bot
+// @description  Sparx Maths bot
 // @match        https://maths.sparx-learning.com/student/*
 // @connect      api.groq.com
 // @copyright    xfwmk - opel - kian
@@ -11,1020 +11,716 @@
 // ==/UserScript==
 
 (function () {
-    'use strict';
+  'use strict';
 
-    // ============================================================
-    // ENTER GROQ API KEY HERE
-    // ============================================================
+  const GROQ_API_KEY = 'YOUR_GROQ_API_KEY';
+  const MODEL = 'openai/gpt-oss-20b';
+  const REQUEST_TIMEOUT_MS = 45000;
+  const POLL_MS = 350;
+  const DEBUG = true;
 
-    const GROQ_API_KEY = 'GROQ_API_KEY';
+  let busy = false;
+  let cancelled = false;
+  let panel;
+  let statusNode;
+  let resultNode;
 
-    // ============================================================
+  const log = (...args) => {
+    if (DEBUG) console.log('[Sparx study helper]', ...args);
+  };
 
-    const MODEL = 'openai/gpt-oss-20b';
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-    let running = false;
+  const visible = el => {
+    if (!el || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 &&
+      s.display !== 'none' && s.visibility !== 'hidden';
+  };
 
-    function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+  const clean = value => String(value ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  function setStatus(message, isError = false) {
+    if (statusNode) {
+      statusNode.textContent = message;
+      statusNode.style.color = isError ? '#b42318' : '#174ea6';
     }
+    log(message);
+  }
 
-    function askGroq(question, answerType, numberOfInputs, choices) {
+  function validateKey() {
+    return typeof GROQ_API_KEY === 'string' &&
+      GROQ_API_KEY.trim().length > 20 &&
+      !/YOUR_GROQ_API_KEY|GROQ_API_KEY|PASTE_YOUR/i.test(GROQ_API_KEY);
+  }
 
-        return new Promise((resolve, reject) => {
+  function requestGroq(messages) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
 
-            let instructions = '';
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
 
-            if (answerType === 'inputs') {
+      const timer = setTimeout(() => {
+        finish(reject, new Error(
+          'Groq request timed out. Check your connection and try again.'
+        ));
+      }, REQUEST_TIMEOUT_MS);
 
-                instructions = `
-Solve every part of the question.
+      try {
+        GM_xmlhttpRequest({
+          method: 'POST',
+          url: 'https://api.groq.com/openai/v1/chat/completions',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${GROQ_API_KEY}`
+          },
+          data: JSON.stringify({
+            model: MODEL,
+            messages,
+            temperature: 0,
+            max_tokens: 1200
+          }),
 
-Return ONLY a JSON array containing the answers in order.
+          onload(response) {
+            if (response.status < 200 || response.status >= 300) {
+              let detail = response.responseText || 'No error details returned.';
+              try {
+                const parsed = JSON.parse(detail);
+                detail = parsed?.error?.message || detail;
+              } catch (_) {}
 
-Example:
-["9","11","13"]
-
-For a single answer:
-["9"]
-
-Do not include A=, B=, C=.
-Do not explain anything.
-`;
-
-            } else if (answerType === 'multiple-choice') {
-
-                instructions = `
-This is a multiple-choice question.
-
-The possible answers are:
-
-${choices.map((x, i) => `${i}: ${x}`).join('\n')}
-
-Reply ONLY with the number of the correct option.
-
-For example:
-
-2
-
-Do not explain anything.
-`;
-
-            } else {
-
-                instructions = `
-Determine the answer to the maths question.
-
-Reply with ONLY the answer.
-Do not explain anything.
-`;
+              finish(reject, new Error(
+                `Groq HTTP ${response.status}: ${detail}`
+              ));
+              return;
             }
-
-
-            const prompt = `
-You are solving a mathematics question.
-
-Question:
-
-${question}
-
-${instructions}
-`;
-
-
-            GM_xmlhttpRequest({
-
-                method: 'POST',
-
-                url: 'https://api.groq.com/openai/v1/chat/completions',
-
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${GROQ_API_KEY}`
-                },
-
-                data: JSON.stringify({
-
-                    model: MODEL,
-
-                    messages: [
-
-                        {
-                            role: 'system',
-                            content:
-                                'You solve mathematics questions accurately. Follow the requested output format exactly.'
-                        },
-
-                        {
-                            role: 'user',
-                            content: prompt
-                        }
-
-                    ],
-
-                    temperature: 0
-
-                }),
-
-                onload: function (response) {
-
-                    if (
-                        response.status < 200 ||
-                        response.status >= 300
-                    ) {
-
-                        reject(
-                            new Error(
-                                `Groq HTTP ${response.status}: ${response.responseText}`
-                            )
-                        );
-
-                        return;
-                    }
-
-
-                    try {
-
-                        const data =
-                            JSON.parse(response.responseText);
-
-                        const text =
-                            data?.choices?.[0]?.message?.content?.trim();
-
-
-                        if (!text) {
-
-                            reject(
-                                new Error(
-                                    'Groq returned an empty answer.'
-                                )
-                            );
-
-                            return;
-                        }
-
-
-                        resolve(text);
-
-                    } catch (error) {
-
-                        reject(error);
-                    }
-                },
-
-
-                onerror: function () {
-
-                    reject(
-                        new Error(
-                            'Could not connect to Groq.'
-                        )
-                    );
-                }
-
-            });
-
-        });
-    }
-    function getPageText() {
-
-        return document.body.innerText
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-    }
-    function findButton(text) {
-
-        const elements = [
-            ...document.querySelectorAll(
-                'button, a, [role="button"], input[type="button"], input[type="submit"]'
-            )
-        ];
-
-        return elements.find(element => {
-
-            const elementText =
-                (
-                    element.innerText ||
-                    element.value ||
-                    element.getAttribute('aria-label') ||
-                    ''
-                )
-                .trim()
-                .toLowerCase();
-
-            return elementText === text.toLowerCase();
-
-        });
-    }
-    async function waitForButton(text) {
-
-        for (;;) {
-
-            if (!running) {
-                return null;
-            }
-
-            const button = findButton(text);
-
-            if (button) {
-                return button;
-            }
-
-            await sleep(300);
-        }
-    }
-    function getAnswerInputs() {
-
-        const inputs = [
-            ...document.querySelectorAll(
-                'input:not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])'
-            )
-        ];
-
-        return inputs.filter(input => {
-
-            const rect =
-                input.getBoundingClientRect();
-
-            const style =
-                window.getComputedStyle(input);
-
-            return (
-                rect.width > 0 &&
-                rect.height > 0 &&
-                style.display !== 'none' &&
-                style.visibility !== 'hidden'
-            );
-        });
-    }
-    function getChoices() {
-
-        const elements = [
-            ...document.querySelectorAll(
-                'button, [role="button"], label'
-            )
-        ];
-
-        return elements.filter(element => {
-
-            const text =
-                element.innerText?.trim();
-
-            if (!text) {
-                return false;
-            }
-
-            const rect =
-                element.getBoundingClientRect();
-
-            return (
-                rect.width > 20 &&
-                rect.height > 20
-            );
-        });
-    }
-    function detectAnswerType() {
-
-        const inputs =
-            getAnswerInputs();
-
-        if (inputs.length > 0) {
-
-            return {
-                type: 'inputs',
-                inputs
-            };
-        }
-
-
-        const choices =
-            getChoices();
-
-        if (choices.length > 1) {
-
-            return {
-                type: 'multiple-choice',
-                choices
-            };
-        }
-
-
-        return {
-            type: 'unknown'
-        };
-    }
-    function setInputValue(input, value) {
-
-        const nativeSetter =
-            Object.getOwnPropertyDescriptor(
-                HTMLInputElement.prototype,
-                'value'
-            )?.set;
-
-        if (nativeSetter) {
-
-            nativeSetter.call(
-                input,
-                String(value)
-            );
-
-        } else {
-
-            input.value =
-                String(value);
-        }
-
-
-        input.dispatchEvent(
-            new Event(
-                'input',
-                {
-                    bubbles: true
-                }
-            )
-        );
-
-
-        input.dispatchEvent(
-            new Event(
-                'change',
-                {
-                    bubbles: true
-                }
-            )
-        );
-    }
-    async function getQuestionScreen() {
-
-        console.log(
-            'Waiting for Sparx question...'
-        );
-
-
-        for (;;) {
-
-            if (!running) {
-                return null;
-            }
-
-
-            const text =
-                getPageText();
-
-
-            if (
-                text &&
-                (
-                    text.includes('Answer') ||
-                    text.includes('Watch video')
-                )
-            ) {
-
-                return text;
-            }
-
-
-            await sleep(500);
-        }
-    }
-
-
-    function showAnswer(answer) {
-
-    let values;
-
-    try {
-        values = JSON.parse(answer);
-    } catch {
-        values = [answer];
-    }
-
-    const old = document.querySelector('#sparx-ai-answer');
-
-    if (old) old.remove();
-
-    const box = document.createElement('div');
-
-    box.id = 'sparx-ai-answer';
-
-    box.style.position = 'fixed';
-    box.style.top = '20px';
-    box.style.right = '20px';
-    box.style.zIndex = '9999999';
-    box.style.background = 'white';
-    box.style.border = '3px solid black';
-    box.style.padding = '15px';
-    box.style.fontFamily = 'Arial';
-    box.style.fontSize = '20px';
-
-    box.innerHTML =
-        '<b>AI answer</b><br><br>' +
-        values.map(
-            (x, i) => `${String.fromCharCode(65 + i)} = ${x}`
-        ).join('<br>');
-
-    document.body.appendChild(box);
-}
-
-    // ============================================================
-    // ANSWER ONE QUESTION
-    // ============================================================
-
-    async function answerQuestion() {
-
-    // ============================================================
-    // 1. READ QUESTION PAGE
-    // ============================================================
-
-    const question =
-        await getQuestionScreen();
-
-    if (!question) {
-        return;
-    }
-
-    console.log('================================');
-    console.log('SPARX QUESTION');
-    console.log(question);
-
-
-    // ============================================================
-    // 2. ASK GROQ WHILE QUESTION IS STILL ON SCREEN
-    // ============================================================
-
-    console.log('Asking Groq BEFORE clicking Answer...');
-
-    /*
-     * We don't know yet how many answer boxes there will be,
-     * so initially ask Groq to return answers separated by |.
-     *
-     * Example:
-     *
-     * 9|11|13
-     */
-
-    const aiAnswer =
-    await askGroq(
-        question,
-        'inputs',
-        0,
-        []
-    );
-
-    console.log(
-        'AI calculated answer:',
-        aiAnswer
-    );
-
-
-    // ============================================================
-    // 3. STORE THE ANSWER
-    // ============================================================
-
-    let storedAnswers;
-
-try {
-    storedAnswers = JSON.parse(aiAnswer);
-
-    if (!Array.isArray(storedAnswers)) {
-        throw new Error('AI response was not an array');
-    }
-
-    storedAnswers =
-        storedAnswers.map(x => String(x).trim());
-
-} catch (e) {
-    throw new Error(
-        `Groq returned an invalid answer:\n${aiAnswer}`
-    );
-}
-
-    console.log(
-        'Stored answers:',
-        storedAnswers
-    );
-
-    showAnswer(JSON.stringify(storedAnswers));
-
-    if (storedAnswers.length === 0) {
-
-        throw new Error(
-            'Groq did not return an answer.'
-        );
-    }
-
-
-    // ============================================================
-    // 4. NOW CLICK "ANSWER"
-    // ============================================================
-
-    const answerButton =
-        await waitForButton('Answer');
-
-    if (!answerButton) {
-        throw new Error(
-            'Could not find Answer button.'
-        );
-    }
-
-    console.log(
-        'Clicking Answer...'
-    );
-
-    answerButton.click();
-
-
-    // ============================================================
-    // 5. WAIT FOR ANSWER PAGE
-    // ============================================================
-
-    let answerData = null;
-
-    for (let i = 0; i < 100; i++) {
-
-        if (!running) {
-            return;
-        }
-
-        answerData =
-            detectAnswerType();
-
-        if (
-            answerData.type !== 'unknown'
-        ) {
-            break;
-        }
-
-        await sleep(200);
-    }
-
-
-    if (
-        !answerData ||
-        answerData.type === 'unknown'
-    ) {
-
-        throw new Error(
-            'Could not detect the Sparx answer interface.'
-        );
-    }
-
-
-    console.log(
-        'Answer interface:',
-        answerData.type
-    );
-
-
-    // ============================================================
-    // 6. NUMBER INPUTS
-    // ============================================================
-
-    if (
-        answerData.type === 'inputs'
-    ) {
-
-        const inputs =
-            answerData.inputs;
-
-        console.log(
-            'Sparx has',
-            inputs.length,
-            'input boxes.'
-        );
-
-
-        /*
-         * IMPORTANT:
-         *
-         * The answer was calculated BEFORE navigating to this page.
-         *
-         * We now simply match the stored answers to the
-         * input boxes.
-         */
-
-
-        if (
-            storedAnswers.length !==
-            inputs.length
-        ) {
-
-            throw new Error(
-                `Sparx has ${inputs.length} answer boxes, but AI returned ${storedAnswers.length} answers.\n\nAI answer: ${aiAnswer}`
-            );
-        }
-
-
-        for (
-            let i = 0;
-            i < inputs.length;
-            i++
-        ) {
-
-            console.log(
-                `Putting ${storedAnswers[i]} into input ${i + 1}`
-            );
-
-
-            setInputValue(
-                inputs[i],
-                storedAnswers[i]
-            );
-
-
-            await sleep(300);
-        }
-    }
-
-
-    // ============================================================
-    // 7. MULTIPLE CHOICE
-    // ============================================================
-
-    else if (
-        answerData.type ===
-        'multiple-choice'
-    ) {
-
-        /*
-         * For multiple choice, Groq should return the
-         * index of the option.
-         */
-
-        const choices =
-            answerData.choices;
-
-
-        const choiceTexts =
-            choices.map(
-                choice =>
-                    choice.innerText.trim()
-            );
-
-
-        console.log(
-            'Choices:',
-            choiceTexts
-        );
-
-
-        /*
-         * We already have the question stored.
-         *
-         * Ask Groq using the stored question rather than
-         * trying to reconstruct it from the answer page.
-         */
-
-        const choiceAnswer =
-            await askGroq(
-                question,
-                'multiple-choice',
-                1,
-                choiceTexts
-            );
-
-
-        const match =
-            choiceAnswer.match(/\d+/);
-
-
-        if (!match) {
-
-            throw new Error(
-                `Groq returned an invalid choice: ${choiceAnswer}`
-            );
-        }
-
-
-        const index =
-            Number(match[0]);
-
-
-        if (
-            index < 0 ||
-            index >= choices.length
-        ) {
-
-            throw new Error(
-                `Invalid choice index: ${index}`
-            );
-        }
-
-
-        console.log(
-            'Selecting:',
-            choiceTexts[index]
-        );
-
-
-        choices[index].click();
-    }
-
-
-    // ============================================================
-    // 8. SUBMIT
-    // ============================================================
-
-    await sleep(500);
-
-
-    const submit =
-        findButton('Submit answer');
-
-
-    if (!submit) {
-
-        throw new Error(
-            'Could not find Submit answer button.'
-        );
-    }
-
-
-    console.log(
-        'Submitting answer...'
-    );
-
-
-    submit.click();
-
-
-    // ============================================================
-    // 9. WAIT FOR RESULT
-    // ============================================================
-
-    await sleep(2000);
-
-
-    console.log(
-        'Answer submitted.'
-    );
-
-
-    // ============================================================
-    // 10. NEXT QUESTION
-    // ============================================================
-
-    const next =
-        findButton('Next');
-
-
-    if (!next) {
-
-        console.log(
-            'No Next button found.'
-        );
-
-        console.log(
-            'Sparx section appears to have finished.'
-        );
-
-        running = false;
-
-        return;
-    }
-
-
-    console.log(
-        'Moving to next question...'
-    );
-
-
-    next.click();
-
-
-    await sleep(1500);
-}
-
-
-    // ============================================================
-    // MAIN BOT
-    // ============================================================
-
-    async function runBot() {
-
-        if (running) {
-            return;
-        }
-
-
-        if (
-            !GROQ_API_KEY ||
-            GROQ_API_KEY ===
-                'PASTE_YOUR_NEW_GROQ_KEY_HERE'
-        ) {
-
-            alert(
-                'Enter your Groq API key in the script first.'
-            );
-
-            return;
-        }
-
-
-        if (
-            !location.hostname
-                .toLowerCase()
-                .includes('sparx-learning.com')
-        ) {
-
-            alert(
-                'This does not appear to be a Sparx Maths page.'
-            );
-
-            return;
-        }
-
-
-        running = true;
-
-
-        console.log(
-            '================================'
-        );
-
-        console.log(
-            'SPARX AI BOT STARTED'
-        );
-
-        console.log(
-            '================================'
-        );
-
-
-        while (running) {
 
             try {
+              const payload = JSON.parse(response.responseText);
+              const content = payload?.choices?.[0]?.message?.content;
 
-                await answerQuestion();
+              if (typeof content !== 'string' || !content.trim()) {
+                throw new Error('Groq returned an empty response.');
+              }
 
+              finish(resolve, content.trim());
             } catch (error) {
-
-                console.error(
-                    'SPARX BOT ERROR:',
-                    error
-                );
-
-
-                running = false;
-
-
-                alert(
-                    'Sparx AI bot stopped.\n\n' +
-                    error.message
-                );
+              finish(reject, new Error(
+                `Could not read Groq response: ${error.message}`
+              ));
             }
-        }
+          },
+
+          onerror() {
+            finish(reject, new Error(
+              'Could not connect to Groq. Check network and userscript permissions.'
+            ));
+          },
+
+          ontimeout() {
+            finish(reject, new Error('Groq request timed out.'));
+          }
+        });
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+  }
+
+  function parseJsonResponse(raw) {
+    const text = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    try {
+      return JSON.parse(text);
+    } catch (_) {}
+
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch (_) {}
     }
 
+    throw new Error(
+      `The model did not return valid JSON: ${raw.slice(0, 300)}`
+    );
+  }
 
-    // ============================================================
-    // STOP
-    // ============================================================
+  function findQuestionContainer() {
+    const selectors = [
+      '[data-testid*="question" i]',
+      '[aria-label*="question" i]',
+      '[class*="question-content" i]',
+      '[class*="question-container" i]',
+      '[class*="question" i]'
+    ];
 
-    function stopBot() {
+    for (const selector of selectors) {
+      const matches = [...document.querySelectorAll(selector)]
+        .filter(visible)
+        .map(el => ({ el, text: clean(el.innerText) }))
+        .filter(x => x.text.length >= 15 && x.text.length < 5000)
+        .sort((a, b) => a.text.length - b.text.length);
 
-        running = false;
+      if (matches.length) return matches[0].el;
+    }
 
-        console.log(
-            'SPARX AI BOT STOPPED'
+    return document.querySelector('[role="main"]') ||
+      document.querySelector('main') ||
+      document.querySelector('article') ||
+      document.body;
+  }
+
+  function readQuestion() {
+    const container = findQuestionContainer();
+
+    if (!container) {
+      throw new Error('Could not locate question content.');
+    }
+
+    const clone = container.cloneNode(true);
+
+    clone.querySelectorAll(
+      'button, input, textarea, select, nav, footer, header, ' +
+      '[aria-hidden="true"], #sparx-study-helper'
+    ).forEach(el => el.remove());
+
+    const text = clean(clone.innerText || clone.textContent);
+
+    if (text.length < 8) {
+      throw new Error(
+        'Question text is too short. Check the page layout.'
+      );
+    }
+
+    const images = [...container.querySelectorAll('img')]
+      .filter(visible)
+      .map(img => ({
+        alt: clean(img.alt),
+        src: img.currentSrc || img.src || ''
+      }));
+
+    return {
+      text: text.slice(0, 10000),
+      images
+    };
+  }
+
+  function getVisibleAnswerInputs() {
+    return [
+      ...document.querySelectorAll(
+        'input:not([type="hidden"]):not([type="button"]):' +
+        ':not([type="submit"]):not([type="checkbox"]):' +
+        ':not([type="radio"]), textarea'
+      )
+    ]
+      .filter(visible)
+      .filter(el =>
+        !panel?.contains(el) &&
+        !el.disabled &&
+        el.type !== 'search'
+      );
+  }
+
+  function getChoiceGroups() {
+    const radios = [
+      ...document.querySelectorAll('input[type="radio"]')
+    ].filter(visible);
+
+    if (radios.length) {
+      return radios
+        .map(input =>
+          input.closest('label') ||
+          input.closest('[role="radio"]') ||
+          input.parentElement ||
+          input
+        )
+        .filter((el, i, arr) =>
+          arr.indexOf(el) === i && visible(el)
         );
     }
 
+    const candidates = [
+      ...document.querySelectorAll(
+        '[role="radio"], button, label, ' +
+        '[data-testid*="option" i], [class*="option" i]'
+      )
+    ]
+      .filter(visible)
+      .filter(el => !panel?.contains(el))
+      .map(el => ({
+        el,
+        text: clean(el.innerText || el.getAttribute('aria-label'))
+      }))
+      .filter(x => x.text.length > 0 && x.text.length < 300);
 
-    // ============================================================
-    // CONTROL PANEL
-    // ============================================================
+    const excluded =
+      /^(answer|submit answer|next|back|continue|watch video|hint|check answer)$/i;
 
-    function createPanel() {
+    const filtered = candidates.filter(x => !excluded.test(x.text));
 
-        if (
-            document.querySelector(
-                '#sparx-ai-panel'
-            )
+    const marked = filtered.filter(x =>
+      /option/i.test(x.el.getAttribute('data-testid') || '') ||
+      /option/i.test(x.el.className?.toString() || '') ||
+      x.el.getAttribute('role') === 'radio'
+    );
+
+    const source = marked.length >= 2 ? marked : filtered;
+    const unique = [];
+
+    for (const item of source) {
+      if (!unique.some(x => x.text === item.text)) {
+        unique.push(item);
+      }
+    }
+
+    return unique.length >= 2 && unique.length <= 12
+      ? unique.map(x => x.el)
+      : [];
+  }
+
+  function detectAnswerInterface() {
+    const selects = [
+      ...document.querySelectorAll('select')
+    ].filter(visible).filter(el => !panel?.contains(el));
+
+    const inputs = getVisibleAnswerInputs();
+
+    if (inputs.length) return { type: 'inputs', inputs };
+
+    const choices = getChoiceGroups();
+
+    if (choices.length >= 2) {
+      return { type: 'multiple-choice', choices };
+    }
+
+    if (selects.length) {
+      return { type: 'dropdowns', selects };
+    }
+
+    return { type: 'unknown' };
+  }
+
+  function choiceText(el) {
+    if (el.matches('input[type="radio"]')) {
+      const label = el.labels?.[0] || el.parentElement;
+      return clean(
+        label?.innerText ||
+        el.getAttribute('aria-label') ||
+        el.value
+      );
+    }
+
+    return clean(
+      el.innerText ||
+      el.getAttribute('aria-label') ||
+      el.value ||
+      el.textContent
+    );
+  }
+
+  function setNativeValue(element, value) {
+    const proto = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+
+    const setter = Object.getOwnPropertyDescriptor(
+      proto, 'value'
+    )?.set;
+
+    if (setter) {
+      setter.call(element, String(value));
+    } else {
+      element.value = String(value);
+    }
+
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function findActionButton(names) {
+    const wanted = names.map(x => x.toLowerCase());
+
+    return [
+      ...document.querySelectorAll(
+        'button, a, [role="button"], ' +
+        'input[type="button"], input[type="submit"]'
+      )
+    ]
+      .filter(visible)
+      .find(el =>
+        wanted.includes(
+          clean(
+            el.innerText ||
+            el.value ||
+            el.getAttribute('aria-label')
+          ).toLowerCase()
+        )
+      );
+  }
+
+  async function solveQuestion(questionData, answerUI) {
+    const choices = answerUI.type === 'multiple-choice'
+      ? answerUI.choices.map(choiceText)
+      : [];
+
+    const dropdowns = answerUI.type === 'dropdowns'
+      ? answerUI.selects.map(sel =>
+          [...sel.options]
+            .map(o => clean(o.textContent))
+            .filter(Boolean)
+        )
+      : [];
+
+    const inputCount = answerUI.type === 'inputs'
+      ? answerUI.inputs.length
+      : 0;
+
+    let format;
+
+    if (answerUI.type === 'multiple-choice') {
+      format =
+        'Return JSON only: {"type":"choice","index":0,' +
+        '"answer":"exact option text","working":"brief steps",' +
+        '"confidence":"low|medium|high"}.\n' +
+        'Options numbered from 0:\n' +
+        choices.map((x, i) => `${i}: ${x}`).join('\n');
+    } else if (answerUI.type === 'dropdowns') {
+      format =
+        `There are ${dropdowns.length} dropdowns.\n` +
+        'Allowed options by dropdown:\n' +
+        dropdowns.map((opts, i) =>
+          `${i}: ${opts.join(' | ')}`
+        ).join('\n') +
+        '\nReturn JSON only: {"type":"dropdowns",' +
+        '"answers":["exact option text"],"working":"brief steps",' +
+        '"confidence":"low|medium|high"}.' +
+        ` The answers array must contain exactly ${dropdowns.length} items.`;
+    } else {
+      format =
+        `There are ${inputCount || 'an unknown number of'} answer inputs.\n` +
+        'Return JSON only: {"type":"inputs","answers":["answer 1"],' +
+        '"working":"brief steps","confidence":"low|medium|high"}.' +
+        ` The answers array must contain exactly ${inputCount || 'the required number of'} items.` +
+        ' Use plain text, fractions like 3/4 when appropriate, ' +
+        'and units if required.';
+    }
+
+    const imageNote = questionData.images.length
+      ? '\nImage alt text (image pixels are NOT sent to this text-only request):\n' +
+        questionData.images.map((x, i) =>
+          `${i + 1}. ${x.alt || '(no alt text)'}`
+        ).join('\n')
+      : '';
+
+    const raw = await requestGroq([
+      {
+        role: 'system',
+        content:
+          'You are a careful maths tutor. Solve step by step internally ' +
+          'and check arithmetic. Do not invent missing diagram details. ' +
+          'Return exactly one JSON object matching the requested format. ' +
+          'If information is missing, say so and set confidence to low.'
+      },
+      {
+        role: 'user',
+        content:
+          `Question text:\n${questionData.text}${imageNote}\n\n` +
+          `${format}\n\nGive concise working and an honest confidence rating.`
+      }
+    ]);
+
+    const parsed = parseJsonResponse(raw);
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('The model response was not an object.');
+    }
+
+    if (answerUI.type === 'multiple-choice') {
+      if (
+        !Number.isInteger(parsed.index) ||
+        parsed.index < 0 ||
+        parsed.index >= choices.length
+      ) {
+        throw new Error(
+          'The model returned an invalid option index.'
+        );
+      }
+    } else {
+      if (!Array.isArray(parsed.answers)) {
+        throw new Error('The model did not return an answers array.');
+      }
+
+      const expected = answerUI.type === 'inputs'
+        ? answerUI.inputs.length
+        : answerUI.selects.length;
+
+      if (parsed.answers.length !== expected) {
+        throw new Error(
+          `The model returned ${parsed.answers.length} answers, ` +
+          `but the page has ${expected} fields. Nothing was filled in.`
+        );
+      }
+    }
+
+    return parsed;
+  }
+
+  function renderResult(solution, answerUI) {
+    resultNode.replaceChildren();
+
+    const heading = document.createElement('strong');
+    heading.textContent = 'Suggested solution — review before using';
+    resultNode.appendChild(heading);
+
+    const confidence = document.createElement('p');
+    confidence.textContent =
+      `Confidence: ${String(solution.confidence || 'not provided')}`;
+    resultNode.appendChild(confidence);
+
+    const working = document.createElement('p');
+    working.textContent =
+      `Working: ${String(solution.working || 'No working provided.')}`;
+    resultNode.appendChild(working);
+
+    const answer = document.createElement('p');
+
+    if (solution.type === 'choice') {
+      answer.textContent =
+        `Suggested option: ${solution.index}. ${solution.answer || ''}`;
+    } else {
+      answer.textContent =
+        `Suggested answer(s): ${(solution.answers || []).map(String).join(' ; ')}`;
+    }
+
+    resultNode.appendChild(answer);
+
+    const apply = document.createElement('button');
+    apply.textContent = 'Fill suggested answer(s)';
+    apply.style.marginRight = '8px';
+
+    apply.onclick = () => {
+      try {
+        if (answerUI.type === 'inputs') {
+          solution.answers.forEach((value, i) => {
+            setNativeValue(answerUI.inputs[i], value);
+          });
+        } else if (answerUI.type === 'multiple-choice') {
+          const el = answerUI.choices[solution.index];
+          const radio = el.matches('input[type="radio"]')
+            ? el
+            : el.querySelector('input[type="radio"]');
+
+          if (radio) {
+            radio.click();
+            radio.checked = true;
+            radio.dispatchEvent(
+              new Event('change', { bubbles: true })
+            );
+          } else {
+            el.click();
+          }
+        } else if (answerUI.type === 'dropdowns') {
+          solution.answers.forEach((value, i) => {
+            const select = answerUI.selects[i];
+
+            const option = [...select.options].find(o =>
+              clean(o.textContent).toLowerCase() ===
+              String(value).trim().toLowerCase()
+            );
+
+            if (!option) {
+              throw new Error(
+                `Could not match "${value}" in dropdown ${i + 1}.`
+              );
+            }
+
+            select.value = option.value;
+            select.dispatchEvent(
+              new Event('input', { bubbles: true })
+            );
+            select.dispatchEvent(
+              new Event('change', { bubbles: true })
+            );
+          });
+        }
+
+        setStatus(
+          'Suggested answer filled. Review it yourself before submitting.'
+        );
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    };
+
+    resultNode.appendChild(apply);
+
+    const clear = document.createElement('button');
+    clear.textContent = 'Clear result';
+    clear.onclick = () => resultNode.replaceChildren();
+    resultNode.appendChild(clear);
+  }
+
+  async function analyzeCurrentQuestion() {
+    if (busy) return;
+
+    busy = true;
+    cancelled = false;
+
+    try {
+      if (!validateKey()) {
+        throw new Error(
+          'Set GROQ_API_KEY near the top of the script to your own API key.'
+        );
+      }
+
+      setStatus('Reading the current question…');
+
+      const questionData = readQuestion();
+      log('Question text:', questionData.text);
+
+      let answerUI = detectAnswerInterface();
+
+      if (answerUI.type === 'unknown') {
+        const answerButton = findActionButton(['Answer']);
+
+        if (!answerButton) {
+          throw new Error(
+            'Could not identify answer fields or find an Answer button. ' +
+            'Sparx may have changed its page layout.'
+          );
+        }
+
+        const oldText = questionData.text;
+
+        setStatus('Opening the answer interface…');
+        answerButton.click();
+
+        const start = Date.now();
+
+        while (
+          Date.now() - start < 12000 &&
+          answerUI.type === 'unknown'
         ) {
-            return;
+          if (cancelled) throw new Error('Stopped by user.');
+          await sleep(POLL_MS);
+          answerUI = detectAnswerInterface();
         }
 
+        if (answerUI.type === 'unknown') {
+          throw new Error(
+            'Could not identify answer fields. No answer was entered.'
+          );
+        }
 
-        const panel =
-            document.createElement('div');
+        questionData.text = oldText;
+      }
 
+      setStatus('Asking Groq for a worked solution…');
 
-        panel.id =
-            'sparx-ai-panel';
+      const solution = await solveQuestion(questionData, answerUI);
 
+      if (cancelled) throw new Error('Stopped by user.');
 
-        panel.style.position =
-            'fixed';
+      renderResult(solution, answerUI);
 
-        panel.style.bottom =
-            '20px';
-
-        panel.style.right =
-            '20px';
-
-        panel.style.zIndex =
-            '999999';
-
-        panel.style.background =
-            'white';
-
-        panel.style.border =
-            '2px solid #222';
-
-        panel.style.padding =
-            '10px';
-
-        panel.style.borderRadius =
-            '8px';
-
-        panel.style.fontFamily =
-            'Arial, sans-serif';
-
-        panel.style.boxShadow =
-            '0 3px 15px rgba(0,0,0,.25)';
-
-
-        const title =
-            document.createElement('div');
-
-        title.innerText =
-            'Sparx AI Bot';
-
-        title.style.fontWeight =
-            'bold';
-
-        title.style.marginBottom =
-            '8px';
-
-
-        const start =
-            document.createElement('button');
-
-        start.innerText =
-            'START AI BOT';
-
-        start.style.padding =
-            '8px 12px';
-
-        start.style.marginRight =
-            '5px';
-
-        start.style.cursor =
-            'pointer';
-
-
-        start.onclick =
-            runBot;
-
-
-        const stop =
-            document.createElement('button');
-
-        stop.innerText =
-            'STOP';
-
-        stop.style.padding =
-            '8px 12px';
-
-        stop.style.cursor =
-            'pointer';
-
-
-        stop.onclick =
-            stopBot;
-
-
-        panel.appendChild(
-            title
-        );
-
-        panel.appendChild(
-            start
-        );
-
-        panel.appendChild(
-            stop
-        );
-
-
-        document.body.appendChild(
-            panel
-        );
+      setStatus(
+        'Solution ready. Review the working and answer before using it.'
+      );
+    } catch (error) {
+      console.error('[Sparx study helper]', error);
+      setStatus(error?.message || String(error), true);
+    } finally {
+      busy = false;
     }
+  }
 
+  function makePanel() {
+    if (document.querySelector('#sparx-study-helper')) return;
 
-    // ============================================================
-    // START ON SPARX
-    // ============================================================
+    panel = document.createElement('section');
+    panel.id = 'sparx-study-helper';
 
-    if (
-        location.hostname
-            .toLowerCase()
-            .includes('maths.sparx-learning.com')
-    ) {
+    Object.assign(panel.style, {
+      position: 'fixed',
+      right: '16px',
+      bottom: '16px',
+      width: '340px',
+      maxHeight: '70vh',
+      overflow: 'auto',
+      zIndex: '2147483647',
+      background: '#fff',
+      color: '#172033',
+      border: '2px solid #334155',
+      borderRadius: '10px',
+      padding: '12px',
+      boxShadow: '0 8px 30px rgba(0,0,0,.25)',
+      font: '14px/1.4 Arial, sans-serif'
+    });
 
-        createPanel();
+    const title = document.createElement('div');
+    title.textContent = 'Sparx Maths Study Assistant';
+    title.style.fontWeight = '700';
+    title.style.marginBottom = '8px';
+
+    statusNode = document.createElement('p');
+    statusNode.textContent =
+      'Ready. Open a question, then choose Analyse current question.';
+
+    const analyze = document.createElement('button');
+    analyze.textContent = 'Analyse current question';
+    analyze.style.marginRight = '8px';
+    analyze.onclick = analyzeCurrentQuestion;
+
+    const stop = document.createElement('button');
+    stop.textContent = 'Stop';
+    stop.onclick = () => {
+      cancelled = true;
+      setStatus('Stop requested.');
+    };
+
+    resultNode = document.createElement('div');
+    resultNode.style.marginTop = '10px';
+    resultNode.style.borderTop = '1px solid #cbd5e1';
+    resultNode.style.paddingTop = '8px';
+
+    const note = document.createElement('small');
+    note.textContent =
+      'Review solutions before use. This helper does not submit answers ' +
+      'or advance automatically. Diagram pixels are not sent to the model.';
+    note.style.display = 'block';
+    note.style.marginTop = '8px';
+    note.style.color = '#475569';
+
+    panel.append(
+      title, statusNode, analyze, stop, resultNode, note
+    );
+
+    document.body.appendChild(panel);
+  }
+
+  if (location.hostname.toLowerCase() === 'maths.sparx-learning.com') {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', makePanel, {
+        once: true
+      });
+    } else {
+      makePanel();
     }
-
+  }
 })();
