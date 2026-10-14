@@ -699,14 +699,6 @@
     resultNode.style.borderTop = '1px solid #cbd5e1';
     resultNode.style.paddingTop = '8px';
 
-    const note = document.createElement('small');
-    note.textContent =
-      'Review solutions before use. This helper does not submit answers ' +
-      'or advance automatically. Diagram pixels are not sent to the model.';
-    note.style.display = 'block';
-    note.style.marginTop = '8px';
-    note.style.color = '#475569';
-
     panel.append(
       title, statusNode, analyze, stop, resultNode, note
     );
