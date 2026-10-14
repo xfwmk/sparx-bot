@@ -19,5 +19,3 @@ Step two - Paste your groq API key into the javascript near the top (it will be 
 Step three - Save the script in tampermonkey (there is another setting that must be enabled #NAME SETTING LATER.
 
 Step three - You can now go to your homework page and there should be a button to start AI if all steps were done correctly.
-
-GIVEN UP ON - WORKS FOR LIKE 75% OF QUESTION TYPES SO IT'S GOOD ENOUGH
