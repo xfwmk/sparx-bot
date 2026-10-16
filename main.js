@@ -699,9 +699,19 @@
     resultNode.style.borderTop = '1px solid #cbd5e1';
     resultNode.style.paddingTop = '8px';
 
+    const note = document.createElement('p');
+    note.textContent =
+      'Setup: add your Groq API key in the script before use. ' +
+      'Only image alt text is sent to the model, not the image itself. ' +
+      'Review every suggested answer before submitting.';
+    note.style.fontSize = '12px';
+    note.style.color = '#475569';
+    note.style.marginTop = '10px';
+
     panel.append(
       title, statusNode, analyze, stop, resultNode, note
     );
+
 
     document.body.appendChild(panel);
   }
